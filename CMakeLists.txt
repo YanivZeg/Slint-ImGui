@@ -100,26 +100,38 @@ endif()
 
 include(cmake/CPM.cmake)
 
+CPMAddPackage(
+    NAME ImGui
+    GITHUB_REPOSITORY ocornut/imgui
+    GIT_TAG v1.92.5
+)
+
+CPMAddPackage(
+    NAME ImPlot
+    GITHUB_REPOSITORY epezent/implot
+    GIT_TAG HEAD
+)
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(EGL REQUIRED egl)
 pkg_check_modules(GLES REQUIRED glesv2)
 
 find_package(Slint REQUIRED)
 
-add_library(imgui_module)
+add_library(imgui_module STATIC)
 target_compile_features(imgui_module PUBLIC cxx_std_23)
 target_include_directories(imgui_module PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui
-    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/backends
+    ${ImGui_SOURCE_DIR}
+    ${ImGui_SOURCE_DIR}/backends
 )
 target_sources(imgui_module
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui_demo.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui_draw.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui_tables.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui_widgets.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/backends/imgui_impl_opengl3.cpp
+        ${ImGui_SOURCE_DIR}/imgui.cpp
+        ${ImGui_SOURCE_DIR}/imgui_demo.cpp
+        ${ImGui_SOURCE_DIR}/imgui_draw.cpp
+        ${ImGui_SOURCE_DIR}/imgui_tables.cpp
+        ${ImGui_SOURCE_DIR}/imgui_widgets.cpp
+        ${ImGui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 # PUBLIC so any code that includes imgui.h (e.g. main.cpp) uses the same
 # layout as the compiled imgui library; otherwise DebugCheckVersionAndDataLayout fails.
@@ -136,6 +148,21 @@ target_link_libraries(imgui_module PUBLIC
 
 add_library(imgui::module ALIAS imgui_module)
 
+add_library(implot_module STATIC)
+target_compile_features(implot_module PUBLIC cxx_std_23)
+target_include_directories(implot_module PUBLIC
+    ${ImPlot_SOURCE_DIR}
+)
+target_sources(implot_module
+    PRIVATE
+        ${ImPlot_SOURCE_DIR}/implot.cpp
+        # ${ImPlot_SOURCE_DIR}/implot_demo.cpp
+        ${ImPlot_SOURCE_DIR}/implot_items.cpp
+)
+target_link_libraries(implot_module PUBLIC imgui::module)
+
+add_library(implot::module ALIAS implot_module)
+
 add_executable(slint-imgui src/main.cpp)
-target_link_libraries(slint-imgui PRIVATE Slint::Slint imgui::module ${GLES_LIBRARIES})
+target_link_libraries(slint-imgui PRIVATE Slint::Slint imgui::module implot::module ${GLES_LIBRARIES})
 slint_target_sources(slint-imgui src/scene.slint)
