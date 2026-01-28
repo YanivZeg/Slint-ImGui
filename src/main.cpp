@@ -101,25 +101,32 @@ struct SceneTexture
     }
 };
 
-class ImGuiRendererBase
+
+template<typename Scene>
+concept ImGuiSceneBuilder = requires(Scene &scene, slint::ComponentHandle<App> &app) {
+    { scene.needsUpdate(app) } -> std::convertible_to<bool>;
+    { scene.build(app) } -> std::same_as<void>;
+    requires std::is_default_constructible_v<Scene>;
+};
+
+template<ImGuiSceneBuilder Scene>
+class ImGuiRenderer
 {
 public:
-    ImGuiRendererBase(slint::ComponentWeakHandle<App> app) : app_weak(app) { }
-    ImGuiRendererBase(ImGuiRendererBase&&) noexcept = default;
-    virtual ~ImGuiRendererBase() = default;
+    ImGuiRenderer(slint::ComponentWeakHandle<App> app) : app_weak_(app) { }
 
     void operator()(slint::RenderingState state, slint::GraphicsAPI)
     {
         switch (state) {
         case slint::RenderingState::RenderingSetup:
-            if (auto app = app_weak.lock()) {
+            if (auto app = app_weak_.lock()) {
                 setup();
                 setTexture(*app);
                 (*app)->window().request_redraw();
             }
             break;
         case slint::RenderingState::BeforeRendering:
-            if (auto app = app_weak.lock()) {
+            if (auto app = app_weak_.lock()) {
                 updateTexture(*app);
             }
             break;
@@ -131,11 +138,6 @@ public:
         }
     }
 protected:
-
-    virtual bool needsUpdate([[maybe_unused]] slint::ComponentHandle<App> &app) = 0;
-
-    virtual void buildScene(slint::ComponentHandle<App> &app) = 0;
-
     void setup()
     {
         IMGUI_CHECKVERSION();
@@ -160,7 +162,7 @@ protected:
 
     void updateTexture(slint::ComponentHandle<App> &app)
     {
-        if (needsUpdate(app)) {
+        if (scene_.needsUpdate(app)) {
             setTexture(app);
         }
     }
@@ -193,7 +195,7 @@ protected:
             ImGui_ImplOpenGL3_NewFrame();
             ImGui::NewFrame();
 
-            buildScene(app);
+            scene_.build(app);
 
             ImGui::Render();
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -212,7 +214,7 @@ protected:
         return resultTexture;
     }
 
-    virtual void teardown()
+    void teardown()
     {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui::DestroyContext(ctx_);
@@ -222,20 +224,20 @@ protected:
     };
 
 private:
-    slint::ComponentWeakHandle<App> app_weak;
+    slint::ComponentWeakHandle<App> app_weak_;
+    Scene scene_;
 
     ImGuiContext *ctx_ = nullptr;
     std::unique_ptr<SceneTexture> displayed_texture_ = nullptr;
     std::unique_ptr<SceneTexture> next_texture_ = nullptr;
 };
 
-class DemoRenderer : public ImGuiRendererBase
+class DemoScene
 {
 public:
-    using ImGuiRendererBase::ImGuiRendererBase;
+    DemoScene() = default;
 
-protected:
-    virtual bool needsUpdate([[maybe_unused]] slint::ComponentHandle<App> &app) override
+    bool needsUpdate(slint::ComponentHandle<App> &app)
     {
         auto new_state = State{
             .red = app->get_selected_red(),
@@ -251,7 +253,7 @@ protected:
         return false;
     }
 
-    virtual void buildScene([[maybe_unused]] slint::ComponentHandle<App> &app) override
+    void build([[maybe_unused]] slint::ComponentHandle<App> &app)
     {
         ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_FirstUseEver);
@@ -291,7 +293,7 @@ int main()
 {
     auto app = App::create();
 
-    if (auto error = app->window().set_rendering_notifier(DemoRenderer(app))) {
+    if (auto error = app->window().set_rendering_notifier(ImGuiRenderer<DemoScene>(app))) {
         if (*error == slint::SetRenderingNotifierError::Unsupported) {
             println(stderr, "This example requires the use of a GL renderer. Please run with the "
                             "environment variable SLINT_BACKEND=winit-femtovg set.");
