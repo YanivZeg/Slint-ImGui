@@ -39,14 +39,14 @@ DEFINE_SCOPED_BINDING(ScopedTextureBinding, GL_TEXTURE_BINDING_2D, glBindTexture
 DEFINE_SCOPED_BINDING(ScopedFrameBufferBinding, GL_DRAW_FRAMEBUFFER_BINDING, glBindFramebuffer,
                       GL_DRAW_FRAMEBUFFER);
 
-struct DemoTexture
+struct SceneTexture
 {
     GLuint texture;
     int width;
     int height;
     GLuint fbo;
 
-    DemoTexture(int width, int height) : width(width), height(height)
+    SceneTexture(int width, int height) : width(width), height(height)
     {
         glGenFramebuffers(1, &fbo);
         glGenTextures(1, &texture);
@@ -85,9 +85,9 @@ struct DemoTexture
         glPixelStorei(GL_UNPACK_SKIP_PIXELS, old_unpack_skip_pixels);
         glPixelStorei(GL_UNPACK_SKIP_ROWS, old_unpack_skip_rows);
     }
-    DemoTexture(const DemoTexture &) = delete;
-    DemoTexture &operator=(const DemoTexture &) = delete;
-    ~DemoTexture()
+    SceneTexture(const SceneTexture &) = delete;
+    SceneTexture &operator=(const SceneTexture &) = delete;
+    ~SceneTexture()
     {
         glDeleteFramebuffers(1, &fbo);
         glDeleteTextures(1, &texture);
@@ -101,36 +101,12 @@ struct DemoTexture
     }
 };
 
-class ImGuiState {
-public:
-    bool update(float red, float green, float blue, int width, int height)
-    {
-        const bool changed = (prev_red_ != red) || (prev_green_ != green) || (prev_blue_ != blue)
-                || (prev_width_ != width) || (prev_height_ != height);
-
-        if (changed) {
-            prev_red_ = red;
-            prev_green_ = green;
-            prev_blue_ = blue;
-            prev_width_ = width;
-            prev_height_ = height;
-        }
-
-        return changed;
-    }
-
-private:
-    float prev_red_ = -1.0f;
-    float prev_green_ = -1.0f;
-    float prev_blue_ = -1.0f;
-    int prev_width_ = -1;
-    int prev_height_ = -1;
-};
-
-class DemoRenderer
+class ImGuiRendererBase
 {
 public:
-    DemoRenderer(slint::ComponentWeakHandle<App> app) : app_weak(app) { }
+    ImGuiRendererBase(slint::ComponentWeakHandle<App> app) : app_weak(app) { }
+    ImGuiRendererBase(ImGuiRendererBase&&) noexcept = default;
+    virtual ~ImGuiRendererBase() = default;
 
     void operator()(slint::RenderingState state, slint::GraphicsAPI)
     {
@@ -138,15 +114,14 @@ public:
         case slint::RenderingState::RenderingSetup:
             if (auto app = app_weak.lock()) {
                 setup();
-                auto width = (*app)->get_requested_texture_width();
-                auto height = (*app)->get_requested_texture_height();
-                auto texture = render(0, 0, 0, width, height);
-                (*app)->set_texture(texture);
+                setTexture(*app);
                 (*app)->window().request_redraw();
             }
             break;
         case slint::RenderingState::BeforeRendering:
-            updateTexture();
+            if (auto app = app_weak.lock()) {
+                updateTexture(*app);
+            }
             break;
         case slint::RenderingState::AfterRendering:
             break;
@@ -155,12 +130,16 @@ public:
             break;
         }
     }
+protected:
 
-private:
+    virtual bool needsUpdate([[maybe_unused]] slint::ComponentHandle<App> &app) = 0;
+
+    virtual void buildScene(slint::ComponentHandle<App> &app) = 0;
+
     void setup()
     {
         IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
+        ctx_ = ImGui::CreateContext();
         ImGuiIO &io = ImGui::GetIO();
         (void)io;
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
@@ -169,39 +148,42 @@ private:
 
         ImGui_ImplOpenGL3_Init("#version 300 es");
 
-        displayed_texture = std::make_unique<DemoTexture>(320, 200);
-        next_texture = std::make_unique<DemoTexture>(320, 200);
+        displayed_texture_ = std::make_unique<SceneTexture>(320, 200);
+        next_texture_ = std::make_unique<SceneTexture>(320, 200);
     }
 
-    void updateTexture()
+    void setTexture(slint::ComponentHandle<App> &app)
     {
-        if (auto app = app_weak.lock()) {
-            auto red = (*app)->get_selected_red();
-            auto green = (*app)->get_selected_green();
-            auto blue = (*app)->get_selected_blue();
-            auto width = (*app)->get_requested_texture_width();
-            auto height = (*app)->get_requested_texture_height();
-            if (imgui_state_.update(red, green, blue, width, height)) {
-                auto texture = render(red, green, blue, width, height);
-                (*app)->set_texture(texture);
-            }
+        auto texture = render(app);
+        (app)->set_texture(texture);
+    }
+
+    void updateTexture(slint::ComponentHandle<App> &app)
+    {
+        if (needsUpdate(app)) {
+            setTexture(app);
         }
     }
 
-    slint::Image render(float red, float green, float blue, int width, int height)
+    slint::Image render(slint::ComponentHandle<App> &app)
     {
-        if (next_texture->width != width || next_texture->height != height) {
-            auto new_texture = std::make_unique<DemoTexture>(width, height);
-            std::swap(next_texture, new_texture);
+        auto width = app->get_requested_texture_width();
+        auto height = app->get_requested_texture_height();
+
+        if (next_texture_->width != width || next_texture_->height != height) {
+            auto new_texture = std::make_unique<SceneTexture>(width, height);
+            std::swap(next_texture_, new_texture);
         }
 
-        next_texture->with_active_fbo([&]() {
+        next_texture_->with_active_fbo([&]() {
             GLint saved_viewport[4];
             glGetIntegerv(GL_VIEWPORT, saved_viewport);
 
-            glViewport(0, 0, next_texture->width, next_texture->height);
+            glViewport(0, 0, next_texture_->width, next_texture_->height);
             glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
+
+            ImGui::SetCurrentContext(ctx_);
 
             ImGuiIO &io = ImGui::GetIO();
             io.DisplaySize = ImVec2(static_cast<float>(width), static_cast<float>(height));
@@ -211,17 +193,7 @@ private:
             ImGui_ImplOpenGL3_NewFrame();
             ImGui::NewFrame();
 
-            ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_FirstUseEver);
-            if (ImGui::Begin("Slint + ImGui", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
-                ImGui::Text("Rendered into texture");
-                float color[3] = { red, green, blue };
-                ImGui::SliderFloat("Red", &color[0], 0.0f, 1.0f);
-                ImGui::SliderFloat("Green", &color[1], 0.0f, 1.0f);
-                ImGui::SliderFloat("Blue", &color[2], 0.0f, 1.0f);
-                ImGui::ColorEdit3("Color", color);
-            }
-            ImGui::End();
+            buildScene(app);
 
             ImGui::Render();
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -230,26 +202,89 @@ private:
         });
 
         auto resultTexture = slint::Image::create_from_borrowed_gl_2d_rgba_texture(
-                next_texture->texture,
-                { static_cast<uint32_t>(next_texture->width),
-                  static_cast<uint32_t>(next_texture->height) },
+                next_texture_->texture,
+                { static_cast<uint32_t>(next_texture_->width),
+                  static_cast<uint32_t>(next_texture_->height) },
                 slint::Image::BorrowedOpenGLTextureOrigin::BottomLeft);
 
-        std::swap(next_texture, displayed_texture);
+        std::swap(next_texture_, displayed_texture_);
 
         return resultTexture;
     }
 
-    void teardown()
+    virtual void teardown()
     {
         ImGui_ImplOpenGL3_Shutdown();
-        ImGui::DestroyContext();
+        ImGui::DestroyContext(ctx_);
+        ctx_ = nullptr;
+        displayed_texture_.reset();
+        next_texture_.reset();
+    };
+
+private:
+    slint::ComponentWeakHandle<App> app_weak;
+
+    ImGuiContext *ctx_ = nullptr;
+    std::unique_ptr<SceneTexture> displayed_texture_ = nullptr;
+    std::unique_ptr<SceneTexture> next_texture_ = nullptr;
+};
+
+class DemoRenderer : public ImGuiRendererBase
+{
+public:
+    using ImGuiRendererBase::ImGuiRendererBase;
+
+protected:
+    virtual bool needsUpdate([[maybe_unused]] slint::ComponentHandle<App> &app) override
+    {
+        auto new_state = State{
+            .red = app->get_selected_red(),
+            .green = app->get_selected_green(),
+            .blue = app->get_selected_blue(),
+            .width = app->get_requested_texture_width(),
+            .height = app->get_requested_texture_height()
+        };
+        if (state_ != new_state) {
+            state_ = new_state;
+            return true;
+        }
+        return false;
     }
 
-    slint::ComponentWeakHandle<App> app_weak;
-    ImGuiState imgui_state_;
-    std::unique_ptr<DemoTexture> displayed_texture;
-    std::unique_ptr<DemoTexture> next_texture;
+    virtual void buildScene([[maybe_unused]] slint::ComponentHandle<App> &app) override
+    {
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Slint + ImGui", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+            ImGui::Text("Rendered into texture");
+            float color[3] = { state_.red, state_.green, state_.blue };
+            ImGui::SliderFloat("Red", &color[0], 0.0f, 1.0f);
+            ImGui::SliderFloat("Green", &color[1], 0.0f, 1.0f);
+            ImGui::SliderFloat("Blue", &color[2], 0.0f, 1.0f);
+            ImGui::ColorEdit3("Color", color);
+        }
+        ImGui::End();
+    }
+
+private:
+    struct State {
+        float red = -1.0f;
+        float green = -1.0f;
+        float blue = -1.0f;
+        int width = -1;
+        int height = -1;
+
+        bool operator==(const State &other) const
+        {
+            return red == other.red && green == other.green && blue == other.blue && width == other.width && height == other.height;
+        }
+        bool operator!=(const State &other) const
+        {
+            return !(*this == other);
+        }
+    };
+
+    State state_;
 };
 
 int main()
