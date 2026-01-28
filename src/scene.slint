@@ -11,14 +11,14 @@ export component App inherits Window {
     out property <float> selected-green <=> green.value;
     out property <float> selected-blue <=> blue.value;
 
-    preferred-width: 500px;
+    preferred-width: 600px;
     preferred-height: 600px;
     title: "Slint OpenGL Texture Example";
     // icon: @image-url("../../logo/slint-logo-small-light.png");
 
     VerticalBox {
         Text {
-            text: "This text is rendered using Slint. The rotating cube below is rendered into an OpenGL texture.";
+            text: "This text is rendered using Slint. The ImGui scene below is rendered into an OpenGL texture.";
             wrap: word-wrap;
         }
 
@@ -42,7 +42,7 @@ export component App inherits Window {
                     }
 
                     red := Slider {
-                        minimum: 0.1;
+                        minimum: 0.0;
                         maximum: 1.0;
                         value: 0.2;
                     }
@@ -55,7 +55,7 @@ export component App inherits Window {
                     }
 
                     green := Slider {
-                        minimum: 0.1;
+                        minimum: 0.0;
                         maximum: 1.0;
                         value: 0.5;
                     }
@@ -68,7 +68,7 @@ export component App inherits Window {
                     }
 
                     blue := Slider {
-                        minimum: 0.1;
+                        minimum: 0.0;
                         maximum: 1.0;
                         value: 0.9;
                     }

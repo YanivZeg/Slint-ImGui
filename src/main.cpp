@@ -14,32 +14,8 @@
 #include <GLES3/gl3.h>
 #include <GLES3/gl3platform.h>
 
-static GLint compile_shader(GLuint program, GLuint shader_type, const GLchar *const *source)
-{
-    auto shader_id = glCreateShader(shader_type);
-    glShaderSource(shader_id, 1, source, nullptr);
-    glCompileShader(shader_id);
-
-    GLint compiled = 0;
-    glGetShaderiv(shader_id, GL_COMPILE_STATUS, &compiled);
-    if (!compiled) {
-        GLint infoLen = 0;
-        glGetShaderiv(shader_id, GL_INFO_LOG_LENGTH, &infoLen);
-        if (infoLen > 1) {
-            char *infoLog = reinterpret_cast<char *>(malloc(sizeof(char) * infoLen));
-            glGetShaderInfoLog(shader_id, infoLen, NULL, infoLog);
-            fprintf(stderr, "Error compiling %s shader:\n%s\n",
-                    shader_type == GL_FRAGMENT_SHADER ? "fragment shader" : "vertex shader",
-                    infoLog);
-            free(infoLog);
-        }
-        glDeleteShader(shader_id);
-        exit(1);
-    }
-    glAttachShader(program, shader_id);
-
-    return shader_id;
-}
+#include "imgui.h"
+#include "imgui_impl_opengl3.h"
 
 #define DEFINE_SCOPED_BINDING(StructName, ParamName, BindingFn, TargetName)                        \
     struct StructName                                                                              \
@@ -62,21 +38,6 @@ static GLint compile_shader(GLuint program, GLuint shader_type, const GLchar *co
 DEFINE_SCOPED_BINDING(ScopedTextureBinding, GL_TEXTURE_BINDING_2D, glBindTexture, GL_TEXTURE_2D);
 DEFINE_SCOPED_BINDING(ScopedFrameBufferBinding, GL_DRAW_FRAMEBUFFER_BINDING, glBindFramebuffer,
                       GL_DRAW_FRAMEBUFFER);
-DEFINE_SCOPED_BINDING(ScopedVBOBinding, GL_ARRAY_BUFFER_BINDING, glBindBuffer, GL_ARRAY_BUFFER);
-
-struct ScopedVAOBinding
-{
-    GLuint saved_value = {};
-    ScopedVAOBinding() = delete;
-    ScopedVAOBinding(const ScopedVAOBinding &) = delete;
-    ScopedVAOBinding &operator=(const ScopedVAOBinding &) = delete;
-    ScopedVAOBinding(GLuint new_value)
-    {
-        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, (GLint *)&saved_value);
-        glBindVertexArray(new_value);
-    }
-    ~ScopedVAOBinding() { glBindVertexArray(saved_value); }
-};
 
 struct DemoTexture
 {
@@ -140,6 +101,32 @@ struct DemoTexture
     }
 };
 
+class ImGuiState {
+public:
+    bool update(float red, float green, float blue, int width, int height)
+    {
+        const bool changed = (prev_red_ != red) || (prev_green_ != green) || (prev_blue_ != blue)
+                || (prev_width_ != width) || (prev_height_ != height);
+
+        if (changed) {
+            prev_red_ = red;
+            prev_green_ = green;
+            prev_blue_ = blue;
+            prev_width_ = width;
+            prev_height_ = height;
+        }
+
+        return changed;
+    }
+
+private:
+    float prev_red_ = -1.0f;
+    float prev_green_ = -1.0f;
+    float prev_blue_ = -1.0f;
+    int prev_width_ = -1;
+    int prev_height_ = -1;
+};
+
 class DemoRenderer
 {
 public:
@@ -159,16 +146,7 @@ public:
             }
             break;
         case slint::RenderingState::BeforeRendering:
-            if (auto app = app_weak.lock()) {
-                auto red = (*app)->get_selected_red();
-                auto green = (*app)->get_selected_green();
-                auto blue = (*app)->get_selected_blue();
-                auto width = (*app)->get_requested_texture_width();
-                auto height = (*app)->get_requested_texture_height();
-                auto texture = render(red, green, blue, width, height);
-                (*app)->set_texture(texture);
-                // (*app)->window().request_redraw();
-            }
+            updateTexture();
             break;
         case slint::RenderingState::AfterRendering:
             break;
@@ -181,153 +159,37 @@ public:
 private:
     void setup()
     {
-        program = glCreateProgram();
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO &io = ImGui::GetIO();
+        (void)io;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-        const GLchar *const fragment_shader =
-                R"(#version 100
-            precision highp float;
-            varying vec2 frag_position;
-            uniform vec3 selected_light_color;
-            uniform float iTime;
+        ImGui::StyleColorsDark();
 
-            float sdRoundBox(vec3 p, vec3 b, float r)
-            {
-                vec3 q = abs(p) - b;
-                return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0) - r;
-            }
-
-            vec3 rotateY(vec3 r, float angle)
-            {
-                mat3 rotation_matrix = mat3(cos(angle), 0, sin(angle), 0, 1, 0, -sin(angle), 0, cos(angle));
-                return rotation_matrix * r;
-            }
-
-            vec3 rotateZ(vec3 r, float angle) {
-                mat3 rotation_matrix = mat3(cos(angle), -sin(angle), 0, sin(angle), cos(angle), 0, 0, 0, 1);
-                return rotation_matrix * r;
-            }
-
-            // Distance from the scene
-            float scene(vec3 r)
-            {
-                vec3 pos = rotateZ(rotateY(r + vec3(-1.0, -1.0, 4.0), iTime), iTime);
-                vec3 cube = vec3(0.5, 0.5, 0.5);
-                float edge = 0.1;
-                return sdRoundBox(pos, cube, edge);
-            }
-
-            // https://iquilezles.org/articles/normalsSDF
-            vec3 normal( in vec3 pos )
-            {
-                vec2 e = vec2(1.0,-1.0)*0.5773;
-                const float eps = 0.0005;
-                return normalize( e.xyy*scene( pos + e.xyy*eps ) +
-                                e.yyx*scene( pos + e.yyx*eps ) +
-                                e.yxy*scene( pos + e.yxy*eps ) +
-                                e.xxx*scene( pos + e.xxx*eps ) );
-            }
-
-            #define ITERATIONS 90
-            #define EPS 0.0001
-
-            vec4 render(vec2 fragCoord, vec3 light_color)
-            {
-                vec4 color = vec4(0, 0, 0, 1);
-
-                vec3 camera = vec3(1.0, 2.0, 1.0);
-                vec3 p = vec3(fragCoord.x, fragCoord.y + 1.0, -1.0);
-                vec3 dir = normalize(p - camera);
-
-                for(int i=0; i < ITERATIONS; i++)
-                {
-                    float dist = scene(p);
-                    if(dist < EPS) {
-                        break;
-                    }
-                    p = p + dir * dist;
-                }
-
-                vec3 surf_normal = normal(p);
-
-                vec3 light_position = vec3(2.0, 4.0, -0.5);
-                float light = 7.0 + 2.0 * dot(surf_normal, light_position);
-                light /= 0.2 * pow(length(light_position - p), 3.5);
-
-                return vec4(light * light_color.x, light * light_color.y, light * light_color.z, 1.0) * 2.0;
-            }
-
-            /*
-            void mainImage(out vec4 fragColor, in vec2 fragCoord)
-            {
-                vec2 r = fragCoord.xy / iResolution.xy;
-                r.x *= (iResolution.x / iResolution.y);
-                fragColor = render(r, vec3(0.2, 0.5, 0.9));
-            }
-            */
-
-            void main() {
-                vec2 r = vec2(0.5 * frag_position.x + 1.0, 0.5 - 0.5 * frag_position.y);
-                gl_FragColor = render(r, selected_light_color);
-            })";
-
-        const GLchar *const vertex_shader = "#version 100\n"
-                                            "attribute vec2 position;\n"
-                                            "varying vec2 frag_position;\n"
-                                            "void main() {\n"
-                                            "    frag_position = position;\n"
-                                            "    gl_Position = vec4(position, 0.0, 1.0);\n"
-                                            "}\n";
-
-        auto fragment_shader_id = compile_shader(program, GL_FRAGMENT_SHADER, &fragment_shader);
-        auto vertex_shader_id = compile_shader(program, GL_VERTEX_SHADER, &vertex_shader);
-
-        GLint linked = 0;
-        glLinkProgram(program);
-        glGetProgramiv(program, GL_LINK_STATUS, &linked);
-
-        if (!linked) {
-            GLint infoLen = 0;
-            glGetProgramiv(program, GL_INFO_LOG_LENGTH, &infoLen);
-            if (infoLen > 1) {
-                char *infoLog = reinterpret_cast<char *>(malloc(sizeof(char) * infoLen));
-                glGetProgramInfoLog(program, infoLen, NULL, infoLog);
-                fprintf(stderr, "Error linking shader:\n%s\n", infoLog);
-                free(infoLog);
-            }
-            glDeleteProgram(program);
-            exit(1);
-        }
-        glDetachShader(program, fragment_shader_id);
-        glDetachShader(program, vertex_shader_id);
-
-        GLuint position_location = glGetAttribLocation(program, "position");
-        effect_time_location = glGetUniformLocation(program, "iTime");
-        selected_light_color_position = glGetUniformLocation(program, "selected_light_color");
+        ImGui_ImplOpenGL3_Init("#version 300 es");
 
         displayed_texture = std::make_unique<DemoTexture>(320, 200);
         next_texture = std::make_unique<DemoTexture>(320, 200);
+    }
 
-        glGenVertexArrays(1, &vao);
-        glGenBuffers(1, &vbo);
-
-        ScopedVBOBinding savedVBO(vbo);
-        ScopedVAOBinding savedVAO(vao);
-
-        const float vertices[] = { -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0, -1.0 };
-        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices) * sizeof(vertices[0]), &vertices,
-                     GL_STATIC_DRAW);
-
-        glEnableVertexAttribArray(position_location);
-        glVertexAttribPointer(position_location, 2, GL_FLOAT, false, 8, 0);
+    void updateTexture()
+    {
+        if (auto app = app_weak.lock()) {
+            auto red = (*app)->get_selected_red();
+            auto green = (*app)->get_selected_green();
+            auto blue = (*app)->get_selected_blue();
+            auto width = (*app)->get_requested_texture_width();
+            auto height = (*app)->get_requested_texture_height();
+            if (imgui_state_.update(red, green, blue, width, height)) {
+                auto texture = render(red, green, blue, width, height);
+                (*app)->set_texture(texture);
+            }
+        }
     }
 
     slint::Image render(float red, float green, float blue, int width, int height)
     {
-        ScopedVBOBinding savedVBO(vbo);
-        ScopedVAOBinding savedVAO(vao);
-
-        glUseProgram(program);
-
         if (next_texture->width != width || next_texture->height != height) {
             auto new_texture = std::make_unique<DemoTexture>(width, height);
             std::swap(next_texture, new_texture);
@@ -335,27 +197,43 @@ private:
 
         next_texture->with_active_fbo([&]() {
             GLint saved_viewport[4];
-            glGetIntegerv(GL_VIEWPORT, &saved_viewport[0]);
+            glGetIntegerv(GL_VIEWPORT, saved_viewport);
 
             glViewport(0, 0, next_texture->width, next_texture->height);
+            glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
 
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   std::chrono::steady_clock::now() - start_time)
-                    / 500.;
-            glUniform1f(effect_time_location, elapsed.count());
-            glUniform3f(selected_light_color_position, red, green, blue);
+            ImGuiIO &io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(static_cast<float>(width), static_cast<float>(height));
+            io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+            io.DeltaTime = 1.0f / 60.0f;
 
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui::NewFrame();
+
+            ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Slint + ImGui", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+                ImGui::Text("Rendered into texture");
+                float color[3] = { red, green, blue };
+                ImGui::SliderFloat("Red", &color[0], 0.0f, 1.0f);
+                ImGui::SliderFloat("Green", &color[1], 0.0f, 1.0f);
+                ImGui::SliderFloat("Blue", &color[2], 0.0f, 1.0f);
+                ImGui::ColorEdit3("Color", color);
+            }
+            ImGui::End();
+
+            ImGui::Render();
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
             glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
         });
 
-        glUseProgram(0);
-
         auto resultTexture = slint::Image::create_from_borrowed_gl_2d_rgba_texture(
                 next_texture->texture,
                 { static_cast<uint32_t>(next_texture->width),
-                  static_cast<uint32_t>(next_texture->height) });
+                  static_cast<uint32_t>(next_texture->height) },
+                slint::Image::BorrowedOpenGLTextureOrigin::BottomLeft);
 
         std::swap(next_texture, displayed_texture);
 
@@ -364,19 +242,12 @@ private:
 
     void teardown()
     {
-        glDeleteProgram(program);
-        glDeleteVertexArrays(1, &vao);
-        glDeleteBuffers(1, &vbo);
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui::DestroyContext();
     }
 
     slint::ComponentWeakHandle<App> app_weak;
-    GLuint vbo;
-    GLuint vao;
-    GLuint program = 0;
-    GLuint effect_time_location = 0;
-    GLuint selected_light_color_position = 0;
-    std::chrono::time_point<std::chrono::steady_clock> start_time =
-            std::chrono::steady_clock::now();
+    ImGuiState imgui_state_;
     std::unique_ptr<DemoTexture> displayed_texture;
     std::unique_ptr<DemoTexture> next_texture;
 };

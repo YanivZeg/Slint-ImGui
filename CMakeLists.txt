@@ -108,7 +108,7 @@ find_package(Slint REQUIRED)
 
 add_library(imgui_module)
 target_compile_features(imgui_module PUBLIC cxx_std_23)
-target_include_directories(imgui_module PRIVATE
+target_include_directories(imgui_module PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui
     ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/backends
 )
@@ -121,8 +121,11 @@ target_sources(imgui_module
         ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/imgui_widgets.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/third-party/imgui/backends/imgui_impl_opengl3.cpp
 )
-target_compile_definitions(imgui_module PRIVATE
+# PUBLIC so any code that includes imgui.h (e.g. main.cpp) uses the same
+# layout as the compiled imgui library; otherwise DebugCheckVersionAndDataLayout fails.
+target_compile_definitions(imgui_module PUBLIC
     IMGUI_DISABLE_OBSOLETE_FUNCTIONS
+    IMGUI_IMPL_OPENGL_ES3
 )
 target_link_libraries(imgui_module PUBLIC
     ${GLES_LIBRARIES}
