@@ -4,10 +4,8 @@
 #include "scene.h"
 
 #include <cstdlib>
-#include <iostream>
+#include <print>
 #include <stdlib.h>
-#include <stdio.h>
-#include <chrono>
 #include <cassert>
 #include <concepts>
 
@@ -16,6 +14,8 @@
 
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
+
+using std::println;
 
 #define DEFINE_SCOPED_BINDING(StructName, ParamName, BindingFn, TargetName)                        \
     struct StructName                                                                              \
@@ -293,11 +293,10 @@ int main()
 
     if (auto error = app->window().set_rendering_notifier(DemoRenderer(app))) {
         if (*error == slint::SetRenderingNotifierError::Unsupported) {
-            fprintf(stderr,
-                    "This example requires the use of a GL renderer. Please run with the "
-                    "environment variable SLINT_BACKEND=winit-femtovg set.\n");
+            println(stderr, "This example requires the use of a GL renderer. Please run with the "
+                            "environment variable SLINT_BACKEND=winit-femtovg set.");
         } else {
-            fprintf(stderr, "Unknown error calling set_rendering_notifier\n");
+            println(stderr, "Unknown error calling set_rendering_notifier");
         }
         return EXIT_FAILURE;
     }
