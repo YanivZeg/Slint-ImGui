@@ -1,4 +1,4 @@
-// Copyright © SixtyFPS GmbH <info@slint.dev>
+// Copyright © YanivZeg <https://github.com/YanivZeg>
 // SPDX-License-Identifier: MIT
 
 #include "scene.h"
