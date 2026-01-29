@@ -286,10 +286,10 @@ private:
     std::unique_ptr<SceneTexture> next_texture_ = nullptr;
 };
 
-class ScenDemo
+class SceneDemo
 {
 public:
-    ScenDemo() = default;
+    SceneDemo() = default;
 
     void setup() {}
     void teardown() {}
@@ -317,10 +317,16 @@ public:
         if (ImGui::Begin("Slint + ImGui", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
             ImGui::Text("Rendered into texture");
             float color[3] = { state_.red, state_.green, state_.blue };
-            ImGui::SliderFloat("Red", &color[0], 0.0f, 1.0f);
-            ImGui::SliderFloat("Green", &color[1], 0.0f, 1.0f);
-            ImGui::SliderFloat("Blue", &color[2], 0.0f, 1.0f);
-            ImGui::ColorEdit3("Color", color);
+            bool changed = false;
+            changed |= ImGui::SliderFloat("Red", &color[0], 0.0f, 1.0f);
+            changed |= ImGui::SliderFloat("Green", &color[1], 0.0f, 1.0f);
+            changed |= ImGui::SliderFloat("Blue", &color[2], 0.0f, 1.0f);
+            changed |= ImGui::ColorEdit3("Color", color);
+            if (changed) {
+                app->set_selected_red(color[0]);
+                app->set_selected_green(color[1]);
+                app->set_selected_blue(color[2]);
+            }
         }
         ImGui::End();
     }
@@ -495,7 +501,7 @@ int main()
 {
     auto app = App::create();
 
-    if (auto error = app->window().set_rendering_notifier(ImGuiRenderer<SceneImPlot>(app))) {
+    if (auto error = app->window().set_rendering_notifier(ImGuiRenderer<SceneDemo>(app))) {
         if (*error == slint::SetRenderingNotifierError::Unsupported) {
             println(stderr, "This example requires the use of a GL renderer. Please run with the "
                             "environment variable SLINT_BACKEND=winit-femtovg set.");
