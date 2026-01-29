@@ -3,10 +3,39 @@
 
 import { Slider, GroupBox, HorizontalBox, VerticalBox, GridBox } from "std-widgets.slint";
 
+export global ImGuiAdapter {
+    callback forward-pointer-event(PointerEvent, length, length);
+    callback forward-scroll-event(PointerScrollEvent) -> EventResult;
+    callback forward-key-pressed-event(KeyEvent) -> EventResult;
+    callback forward-key-released-event(KeyEvent) -> EventResult;
+    callback forward-focus-changed-event(FocusReason);
+}
+
+component ImGui inherits Rectangle {
+    in property <image> texture;
+
+    image := Image {
+        source: root.texture;
+        width: 100%;
+        height: 100%;
+    }
+
+    ta := TouchArea {
+        pointer-event(e) => { ImGuiAdapter.forward-pointer-event(e, self.mouse-x, self.mouse-y) }
+        scroll-event(e) => { ImGuiAdapter.forward-scroll-event(e) }
+    }
+
+    fs := FocusScope {
+        capture-key-pressed(e) => { ImGuiAdapter.forward-key-pressed-event(e) }
+        capture-key-released(e) => { ImGuiAdapter.forward-key-released-event(e) }
+        focus-changed-event(e) => { ImGuiAdapter.forward-focus-changed-event(e) }
+    }
+}
+
 export component App inherits Window {
-    in property <image> texture <=> image.source;
-    out property <int> requested-texture-width: image.width/1phx;
-    out property <int> requested-texture-height: image.height/1phx;
+    in property <image> texture <=> imgui.texture;
+    out property <int> requested-texture-width: imgui.width/1phx;
+    out property <int> requested-texture-height: imgui.height/1phx;
     out property <float> selected-red <=> red.value;
     out property <float> selected-green <=> green.value;
     out property <float> selected-blue <=> blue.value;
@@ -22,7 +51,7 @@ export component App inherits Window {
             wrap: word-wrap;
         }
 
-        image := Image {
+        imgui := ImGui {
             preferred-width: 640px;
             preferred-height: 640px;
             min-width: 64px;

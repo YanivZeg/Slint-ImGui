@@ -124,14 +124,15 @@ public:
         switch (state) {
         case slint::RenderingState::RenderingSetup:
             if (auto app = app_weak_.lock()) {
-                setup();
-                setTexture(*app);
+                setup(*app);
+                updateTexture(*app);
                 (*app)->window().request_redraw();
             }
             break;
         case slint::RenderingState::BeforeRendering:
             if (auto app = app_weak_.lock()) {
-                updateTexture(*app);
+                if (input_pending_ || scene_.needsUpdate(*app))
+                    updateTexture(*app);
             }
             break;
         case slint::RenderingState::AfterRendering:
@@ -141,8 +142,26 @@ public:
             break;
         }
     }
-protected:
-    void setup()
+
+private:
+
+    ImGuiMouseButton_ toImGuiMouseButton(slint::cbindgen_private::PointerEventButton button)
+    {
+        switch (button) {
+        case slint::cbindgen_private::PointerEventButton::Left:
+            return ImGuiMouseButton_Left;
+        case slint::cbindgen_private::PointerEventButton::Right:
+            return ImGuiMouseButton_Right;
+        case slint::cbindgen_private::PointerEventButton::Middle:
+            return ImGuiMouseButton_Middle;
+        default:
+            println("Unknown button: {}", static_cast<int>(button));
+            assert(false);
+            return ImGuiMouseButton_Left;
+        }
+    }
+
+    void setup(slint::ComponentHandle<App> &app)
     {
         IMGUI_CHECKVERSION();
         ctx_ = ImGui::CreateContext();
@@ -157,24 +176,49 @@ protected:
         displayed_texture_ = std::make_unique<SceneTexture>(320, 200);
         next_texture_ = std::make_unique<SceneTexture>(320, 200);
 
+        using namespace slint::cbindgen_private;
+
+        app->global<ImGuiAdapter>().on_forward_pointer_event([this](const PointerEvent &event, float x, float y) {
+            auto &io = ImGui::GetIO(ctx_);
+            io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
+            io.AddMousePosEvent(x, y);
+
+            if (event.kind == PointerEventKind::Down || event.kind == PointerEventKind::Up)
+                io.AddMouseButtonEvent(toImGuiMouseButton(event.button), event.kind == PointerEventKind::Down);
+
+            updateInputPending();
+        });
+
+        app->global<ImGuiAdapter>().on_forward_scroll_event([this](const PointerScrollEvent &event) {
+            auto &io = ImGui::GetIO(ctx_);
+            io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
+            if (!event.modifiers.shift)
+                io.AddMouseWheelEvent(event.delta_x, event.delta_y);
+            else
+                io.AddMouseWheelEvent(event.delta_y, event.delta_x);
+
+            updateInputPending();
+            return EventResult::Accept;
+        });
+
         scene_.setup();
     }
 
-    void setTexture(slint::ComponentHandle<App> &app)
+    void updateInputPending()
     {
-        auto texture = render(app);
-        (app)->set_texture(texture);
+        input_pending_ = true;
+        if (auto a = app_weak_.lock())
+            (*a)->window().request_redraw();
     }
 
     void updateTexture(slint::ComponentHandle<App> &app)
     {
-        if (scene_.needsUpdate(app)) {
-            setTexture(app);
-        }
+        app->set_texture(render(app));
     }
 
     slint::Image render(slint::ComponentHandle<App> &app)
     {
+        input_pending_ = false;
         auto width = app->get_requested_texture_width();
         auto height = app->get_requested_texture_height();
 
@@ -191,6 +235,7 @@ protected:
             glClearColor(0.1f, 0.1f, 0.12f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
 
+            auto *saved_ctx = ImGui::GetCurrentContext();
             ImGui::SetCurrentContext(ctx_);
 
             ImGuiIO &io = ImGui::GetIO();
@@ -205,6 +250,8 @@ protected:
 
             ImGui::Render();
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+            ImGui::SetCurrentContext(saved_ctx);
 
             glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
         });
@@ -230,9 +277,9 @@ protected:
         next_texture_.reset();
     };
 
-private:
     slint::ComponentWeakHandle<App> app_weak_;
     Scene scene_;
+    bool input_pending_ = false;
 
     ImGuiContext *ctx_ = nullptr;
     std::unique_ptr<SceneTexture> displayed_texture_ = nullptr;
